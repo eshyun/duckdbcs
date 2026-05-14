@@ -1,0 +1,25 @@
+[project]
+name = "duckdbcs"
+version = "0.1.0"
+description = "DuckDB Quack Client/Server — remote protocol for concurrent multi-process access"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.5.2",
+    "polars>=1.40.1",
+    "pyarrow>=24.0.0",
+    "typer>=0.12",
+]
+
+[project.scripts]
+duckdbcs = "duckdbcs.cli:main"
+
+[dependency-groups]
+dev = [
+    "ipdb>=0.13.13",
+    "ipython>=9.13.0",
+    "jupyterlab>=4.5.7",
+    "pandas>=3.0.3",
+    "pyinstrument>=5.1.2",
+    "pytest>=9.0.3",
+]
