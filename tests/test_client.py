@@ -453,10 +453,11 @@ class TestQuackClientLifecycle:
         mock_conn.close.assert_called_once()
 
     def test_sql_class_method(self):
-        """QuackClient.sql() should work as a one-shot convenience."""
+        """duckdbcs.sql() should work as a one-shot convenience."""
         with patch("duckdbcs.client.sql") as mock_sql:
             mock_sql.return_value = "result"
-            r = QuackClient.sql("SELECT 1", token="tok")
+            from duckdbcs import sql as module_sql
+            r = module_sql("SELECT 1", token="tok")
             mock_sql.assert_called_once_with(
                 query="SELECT 1",
                 host="localhost",

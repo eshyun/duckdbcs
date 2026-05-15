@@ -199,7 +199,13 @@ def sql(
     client = QuackClient(token=token)
     try:
         client.connect(host=host, port=port, attach_alias=attach_alias, disable_ssl=disable_ssl)
-        return client.query(query, database=database)
+        result = client.query(query, database=database)
+        # Eagerly materialize the result into a local in-memory connection
+        # so the QuackResult survives client.close() below.
+        local_conn = duckdb.connect(":memory:")
+        local_conn.execute("CREATE TEMP TABLE _quack_result AS SELECT * FROM result._rel")
+        rel = local_conn.sql("TABLE _quack_result")
+        return QuackResult(rel)
     finally:
         client.close()
 
@@ -475,7 +481,7 @@ class QuackClient:
             return self.status()
 
         except duckdb.Error as exc:
-            logger.error("Failed to connect to Quack server: %s", exc)
+            logger.warning("Failed to connect to Quack server: %s", exc)
             raise RuntimeError(f"Could not connect to Quack server at {uri}: {exc}") from exc
 
     def disconnect(self) -> None:
@@ -904,49 +910,27 @@ class QuackClient:
             })
         return status
 
-    # ------------------------------------------------------------------
-    # Class method: one-shot query (like duckdb.sql)
-    # ------------------------------------------------------------------
-
-    @classmethod
     def sql(
-        cls,
+        self,
         query: str,
-        host: str = "localhost",
-        port: int = 9494,
-        token: Optional[str] = None,
-        attach_alias: str = "remote_server",
         database: Optional[str] = None,
-        disable_ssl: bool = False,
-        verbose: bool = False,
     ) -> QuackResult:
-        """One-shot query against a remote Quack server (class method).
+        """Run a query using this client's existing connection.
 
-        Convenience shortcut — creates a temporary client, connects, runs the
-        query, and returns a ``QuackResult``. Similar to ``duckdb.sql()``.
+        This is an instance method that delegates to ``self.query()``,
+        reusing the already-established connection.
 
-        Examples:
-            from duckdbcs import QuackClient
+        For a one-shot query (creates a temporary client), use
+        ``duckdbcs.sql()`` instead.
 
-            results = QuackClient.sql("SELECT 42", token="my_token")
-            results.show()
+        Args:
+            query: SQL query to execute.
+            database: Optional catalog to route the query through the server.
 
-            # Convert to Pandas:
-            df = QuackClient.sql(
-                "SELECT * FROM listings.market_listings LIMIT 10",
-                host="localhost", port=9494, token="my_token",
-            ).df()
+        Returns:
+            ``QuackResult`` with format conversion methods.
         """
-        return sql(
-            query=query,
-            host=host,
-            port=port,
-            token=token,
-            attach_alias=attach_alias,
-            database=database,
-            disable_ssl=disable_ssl,
-            verbose=verbose,
-        )
+        return self.query(query, database=database)
 
     # ------------------------------------------------------------------
     # Lifecycle

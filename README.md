@@ -573,26 +573,69 @@ with QuackClient(token="my_token") as client:
     results.show()
 ```
 
-#### `QuackClient.sql()` — 원샷 원격 쿼리 (class method)
+#### 자동 서버 시작/중지 (`auto_start_server`, `auto_stop_server`)
 
-`QuackClient.sql()`은 클래스 메서드로, 임시 클라이언트를 생성하여 원샷(one-shot) 쿼리를 실행합니다. `duckdb.sql()`과 유사한 사용감을 제공합니다.
+`host`를 지정할 때 서버가 실행 중이지 않으면 기본적으로 연결 오류가 발생합니다.
+`auto_start_server=True`를 설정하면 서버가 없을 때 **자동으로 in-process 서버를 시작**한 후 연결합니다.
 
 ```python
 from duckdbcs import QuackClient
 
-# 한 줄로 원격 쿼리 실행
-results = QuackClient.sql("SELECT 42 AS answer", token="my_token")
+# 서버가 없으면 자동으로 시작하고, 클라이언트 종료 시 자동 중지
+client = QuackClient(
+    token="my_secure_token",
+    host="localhost",
+    port=9494,
+    auto_start_server=True,   # 서버가 없으면 자동 시작
+    auto_stop_server=True,    # 클라이언트 종료 시 자동 중지 (기본값)
+)
+
+# 바로 쿼리 실행 가능 (서버가 자동으로 시작됨)
+results = client.query("SELECT 42 AS answer")
+print(results.fetchall())
+
+# 클라이언트 종료 시 auto_start_server로 시작된 서버도 함께 종료됨
+client.close()
+```
+
+> **참고:** `auto_start_server=True`로 시작된 서버는 `auto_stop_server=True`(기본값)일 때
+> `client.close()` 또는 컨텍스트 매니저 종료 시 자동으로 중지됩니다.
+> `auto_stop_server=False`로 설정하면 클라이언트가 종료되어도 서버가 계속 실행됩니다.
+
+
+#### `client.sql()` — 기존 연결로 쿼리 실행 (instance method)
+
+`client.sql()`은 **인스턴스 메서드**로, `client.query()`와 동일하게 기존 연결을 재사용합니다.
+`duckdb.sql()`과 유사한 사용감을 제공합니다.
+
+> **`client.query()`와의 관계:**
+> `client.sql()`은 내부적으로 `self.query()`를 호출하므로 `client.query()`와 완전히 동일하게 동작합니다.
+> 둘 다 기존 클라이언트 연결을 사용하며, `client.close()` 후에는 반환된 `QuackResult`를 사용할 수 없습니다.
+> 사용자 취향에 따라 선택하세요.
+
+```python
+from duckdbcs import QuackClient
+
+client = QuackClient(token="my_secure_token")
+client.connect("localhost", 9494)
+
+# client.sql()은 client.query()와 동일하게 기존 연결 사용
+results = client.sql("SELECT 42 AS answer")
 print(results.fetchall())  # [{'answer': 42}]
 
-# Pandas DataFrame으로 바로 변환
-df = QuackClient.sql(
-    "SELECT * FROM listings.market_listings LIMIT 10",
-    host="localhost", port=9494, token="my_token",
-).df()
-
 # 체이닝
-QuackClient.sql("SELECT 42 AS n").query("SELECT n + 1 FROM result").show()
+client.sql("SELECT 42 AS n").query("SELECT n + 1 FROM result").show()
+
+client.disconnect()
 ```
+
+> **원샷(one-shot) 쿼리가 필요하다면?**
+> `duckdbcs.sql()` 모듈 레벨 함수를 사용하세요. 임시 클라이언트를 생성하고 쿼리 실행 후
+> 자동으로 종료하며, 반환된 `QuackResult`는 독립적인 로컬 연결을 기반으로 안전합니다.
+> ```python
+> from duckdbcs import sql
+> results = sql("SELECT 42", token="my_token")
+> ```
 
 **파라미터:**
 
@@ -755,6 +798,16 @@ if result:
 
 `duckdbcs.sql()`은 모듈 레벨 편의 함수로, `duckdb.sql()`과 유사하게 원격 Quack 서버에 한 번에 쿼리합니다. 임시 클라이언트를 생성하고 연결하여 쿼리를 실행한 후 `QuackResult`를 반환합니다.
 
+> **`client.query()`와의 차이점:**
+> - `client.query()`는 **인스턴스 메서드**로, 이미 연결된 클라이언트의 DuckDB 연결을 그대로 사용합니다.
+>   반환된 `QuackResult`는 클라이언트 연결에 의존하므로, `client.close()` 후에는 사용할 수 없습니다.
+> - `sql()`은 **모듈 레벨 함수**로, 내부적으로 임시 클라이언트를 생성 → 연결 → 쿼리 실행 →
+>   **결과를 로컬 메모리로 eager materialize** → 임시 클라이언트 종료합니다.
+>   반환된 `QuackResult`는 **독립적인 로컬 DuckDB 연결**을 기반으로 하므로,
+>   원본 클라이언트와 무관하게 안전하게 사용할 수 있습니다.
+> - `sql()`은 `host`, `port`, `token` 등을 매번 지정해야 하지만,
+>   `client.query()`는 이미 연결된 클라이언트를 재사용합니다.
+
 ```python
 from duckdbcs import sql
 
@@ -777,6 +830,10 @@ results = sql(
 # 체이닝
 sql("SELECT 42 AS n").query("SELECT n + 1 FROM result").show()
 ```
+
+> **참고:** `QuackClient.sql()`(클래스 메서드)과 `duckdbcs.sql()`(모듈 레벨 함수)은
+> 내부적으로 동일한 `sql()` 함수를 호출하므로 완전히 동일하게 동작합니다.
+> 사용자 편의에 따라 두 가지 방식 중 선택하여 사용할 수 있습니다.
 
 **파라미터:**
 
