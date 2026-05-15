@@ -135,8 +135,8 @@ class QuackServer:
             self._conn.execute("LOAD quack;")
 
             result = self._conn.execute(
-                "CALL quack_serve(?, token := ?, allow_other_hostname := ?)",
-                [uri, self._token, allow_other_hostname],
+                "CALL quack_serve(?, token := ?, allow_other_hostname := ?, disable_ssl := ?)",
+                [uri, self._token, allow_other_hostname, disable_ssl],
             ).fetchone()
 
             self._running = True
@@ -250,10 +250,6 @@ class QuackServer:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _load_token(self) -> Optional[str]:
-        """Try to load the token from environment or a secret file. (legacy)"""
-        return load_token()
 
     def _get_status(self) -> dict:
         status = {

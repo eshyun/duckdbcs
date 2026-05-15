@@ -6,9 +6,8 @@ dist/
 wheels/
 *.egg-info
 
-# uv-generated files
-uv.lock
-.python-version
-
 # Virtual environments
 .venv
+
+# IDE / editor files
+codedb.snapshot

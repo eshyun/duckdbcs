@@ -454,20 +454,11 @@ class TestQuackClientLifecycle:
 
     def test_sql_class_method(self):
         """duckdbcs.sql() should work as a one-shot convenience."""
-        with patch("duckdbcs.client.sql") as mock_sql:
+        with patch("duckdbcs.sql") as mock_sql:
             mock_sql.return_value = "result"
             from duckdbcs import sql as module_sql
             r = module_sql("SELECT 1", token="tok")
-            mock_sql.assert_called_once_with(
-                query="SELECT 1",
-                host="localhost",
-                port=9494,
-                token="tok",
-                attach_alias="remote_server",
-                database=None,
-                disable_ssl=False,
-                verbose=False,
-            )
+            mock_sql.assert_called_once_with("SELECT 1", token="tok")
             assert r == "result"
 
 
@@ -525,15 +516,20 @@ class TestFindRouteCatalog:
 
 class TestSqlFunction:
     def test_sql_basic(self):
-        """sql() should create a client, connect, query, and close."""
+        """sql() should create a client, connect, query, close, and return a QuackResult."""
+        import pyarrow as pa
+        arrow_tbl = pa.table({"answer": [42]})
         with patch("duckdbcs.client.QuackClient") as MockClient:
             mock_instance = MagicMock()
-            mock_instance.query.return_value = "query_result"
+            mock_query_result = MagicMock()
+            mock_query_result.arrow.return_value = arrow_tbl
+            mock_instance.query.return_value = mock_query_result
             MockClient.return_value = mock_instance
 
             result = sql("SELECT 42", token="tok")
 
-            assert result == "query_result"
+            assert isinstance(result, QuackResult)
+            assert result.fetchall() == [{"answer": 42}]
             MockClient.assert_called_once_with(token="tok")
             mock_instance.connect.assert_called_once_with(
                 host="localhost",
@@ -545,8 +541,13 @@ class TestSqlFunction:
             mock_instance.close.assert_called_once()
 
     def test_sql_with_database(self):
+        import pyarrow as pa
+        arrow_tbl = pa.table({"answer": [42]})
         with patch("duckdbcs.client.QuackClient") as MockClient:
             mock_instance = MagicMock()
+            mock_query_result = MagicMock()
+            mock_query_result.arrow.return_value = arrow_tbl
+            mock_instance.query.return_value = mock_query_result
             MockClient.return_value = mock_instance
 
             sql("SELECT * FROM analytics.users", token="tok", database="analytics")
@@ -556,8 +557,13 @@ class TestSqlFunction:
             )
 
     def test_sql_custom_host_port(self):
+        import pyarrow as pa
+        arrow_tbl = pa.table({"answer": [42]})
         with patch("duckdbcs.client.QuackClient") as MockClient:
             mock_instance = MagicMock()
+            mock_query_result = MagicMock()
+            mock_query_result.arrow.return_value = arrow_tbl
+            mock_instance.query.return_value = mock_query_result
             MockClient.return_value = mock_instance
 
             sql("SELECT 1", host="server.example.com", port=9999, token="tok")

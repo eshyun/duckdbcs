@@ -40,6 +40,11 @@ class QuackResult:
         self._columns = [desc[0] for desc in relation.description]
         self._cached_rows: Optional[list[dict]] = None
 
+    @property
+    def relation(self) -> "duckdb.DuckDBPyRelation":
+        """Return the underlying DuckDB relation object."""
+        return self._rel
+
     # ------------------------------------------------------------------
     # DuckDB-style output format conversions
     # ------------------------------------------------------------------
@@ -202,9 +207,10 @@ def sql(
         result = client.query(query, database=database)
         # Eagerly materialize the result into a local in-memory connection
         # so the QuackResult survives client.close() below.
+        # Use Arrow to transfer data across DuckDB connections (a DuckDBPyRelation
+        # is tied to its creating connection and cannot be used by another one).
         local_conn = duckdb.connect(":memory:")
-        local_conn.execute("CREATE TEMP TABLE _quack_result AS SELECT * FROM result._rel")
-        rel = local_conn.sql("TABLE _quack_result")
+        rel = local_conn.from_arrow(result.arrow())
         return QuackResult(rel)
     finally:
         client.close()

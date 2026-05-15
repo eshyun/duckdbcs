@@ -487,25 +487,47 @@ def server_status():
     print("      print(server.status())")
 
 
-@server_app.command("attach", help="Attach a database file (from Python API)")
+@server_app.command("attach", help="Attach a database file on a running server")
 def server_attach(
     path: str = typer.Argument(..., help="Path to the DuckDB database file"),
     alias: Optional[str] = typer.Option(None, "--as", help="Catalog alias"),
+    host: str = typer.Option("localhost", "--host", help="Server hostname"),
+    port: int = typer.Option(9494, "--port", help="Server port"),
+    token: Optional[str] = typer.Option(None, "--token", help="Auth token"),
 ):
-    print("Use the Python API to attach databases:")
-    print("  from duckdbcs import QuackServer")
-    print("  with QuackServer(token='...') as server:")
-    print("      server.start()")
-    print(f"      server.attach_database('{path}', '{alias or Path(path).stem}')")
+    """Attach a database file on a running Quack server, using a client connection."""
+    token = _resolve_token(token)
+    client = QuackClient(token=token)
+    try:
+        _auto_connect(client, host, port, token)
+        alias = client.attach_remote(path, alias)
+        print(f"Server attached '{path}' as '{alias}'.")
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    finally:
+        client.close()
 
 
-@server_app.command("detach", help="Detach a database (from Python API)")
-def server_detach(alias: str = typer.Argument(..., help="Catalog alias to detach")):
-    print("Use the Python API to detach databases:")
-    print("  from duckdbcs import QuackServer")
-    print("  with QuackServer(token='...') as server:")
-    print("      server.start()")
-    print(f"      server.detach_database('{alias}')")
+@server_app.command("detach", help="Detach a database from a running server")
+def server_detach(
+    alias: str = typer.Argument(..., help="Catalog alias to detach"),
+    host: str = typer.Option("localhost", "--host", help="Server hostname"),
+    port: int = typer.Option(9494, "--port", help="Server port"),
+    token: Optional[str] = typer.Option(None, "--token", help="Auth token"),
+):
+    """Detach a database from a running Quack server, using a client connection."""
+    token = _resolve_token(token)
+    client = QuackClient(token=token)
+    try:
+        _auto_connect(client, host, port, token)
+        client.detach_remote(alias)
+        print(f"Server detached '{alias}'.")
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    finally:
+        client.close()
 
 
 # ===========================================================================
