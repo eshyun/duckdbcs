@@ -479,12 +479,39 @@ def server_stop(
 
 
 @server_app.command("status", help="Show server status")
-def server_status():
-    print("Use the Python API to check server status:")
-    print("  from duckdbcs import QuackServer")
-    print("  with QuackServer(token='...') as server:")
-    print("      server.start()")
-    print("      print(server.status())")
+def server_status(
+    host: str = typer.Option("localhost", "--host", help="Server hostname"),
+    port: int = typer.Option(9494, "--port", help="Server port"),
+    token: Optional[str] = typer.Option(None, "--token", help="Auth token"),
+):
+    """Check if a Quack server is running and show its status."""
+    import json
+    from duckdbcs.client import QuackClient
+
+    token = _resolve_token(token)
+    
+    # Try to connect and get server status
+    client = None
+    try:
+        # Create client without auto-connect, then connect manually
+        # so we can catch connection errors properly
+        client = QuackClient(token=token, auto_start_server=False)
+        client.connect(host=host, port=port, suppress_warning=True)
+
+        status = client.status()
+        print(f"Server status at {host}:{port}:")
+        print(f"  Connected: {status.get('connected', False)}")
+        print(f"  Token: {'set' if status.get('token_set') else '(not set)'}")
+        if status.get('uri'):
+            print(f"  URI: {status['uri']}")
+        if status.get('attach_alias'):
+            print(f"  Attach alias: {status['attach_alias']}")
+    except Exception as exc:
+        print(f"Server is not running or not reachable at {host}:{port}")
+        raise typer.Exit(code=1)
+    finally:
+        if client:
+            client.close()
 
 
 @server_app.command("attach", help="Attach a database file on a running server")

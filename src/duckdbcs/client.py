@@ -297,6 +297,10 @@ class QuackClient:
                     )
                 else:
                     raise
+            else:
+                # Connection succeeded - check if this was auto-started
+                if auto_start_server:
+                    logger.info("Connected to existing server at %s:%d (auto_start_server=True, but server was already running).", host, port)
 
     # ------------------------------------------------------------------
     # Auto-start server management
