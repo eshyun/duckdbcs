@@ -4,14 +4,16 @@ Connects to a remote Quack server, executes queries, and manages
 attached databases on the server side.
 """
 
+import atexit
 import logging
 from typing import Any, Optional
 
 import duckdb
 
-from duckdbcs.config import ClientConfig, load_token
+from duckdbcs.config import ClientConfig, ServerConfig, load_config, load_token
 
 logger = logging.getLogger("duckdbcs.client")
+
 
 # ---------------------------------------------------------------------------
 # QuackResult — like DuckDB's relation but for remote server results
@@ -43,7 +45,7 @@ class QuackResult:
     # ------------------------------------------------------------------
 
     def fetchall(self) -> list[dict]:
-        """Fetch all rows as a list of Python dicts (column → value)."""
+        """Fetch all rows as a list of Python dicts (column -> value)."""
         if self._cached_rows is None:
             rows = self._rel.fetchall()
             self._cached_rows = [dict(zip(self._columns, row)) for row in rows]
@@ -229,6 +231,8 @@ class QuackClient:
         port: int = 9494,
         attach_alias: str = "remote_server",
         disable_ssl: bool = False,
+        auto_start_server: bool = False,
+        auto_stop_server: bool = True,
     ):
         """Initialize a QuackClient.
 
@@ -242,8 +246,16 @@ class QuackClient:
                           Only used when ``host`` is given.
             disable_ssl: Force plain HTTP (default: auto-detect). Only used when
                          ``host`` is given.
+            auto_start_server: If True, automatically start a local Quack server when
+                               connection to the specified host:port fails.
+            auto_stop_server: If True (default), stop the auto-started server when the
+                              client is closed. Only relevant when auto_start_server=True.
         """
         self._conn = connection or duckdb.connect(":memory:")
+        # Auto-started server tracking
+        self._auto_started_server: Optional["QuackServer"] = None  # noqa: F821
+        self._auto_start_config: Optional[ServerConfig] = None
+        self._auto_stop_server = auto_stop_server
         # Token resolution: explicit > env > config file > .quack_secret
         self._token = token or load_token()
         self._config: Optional[ClientConfig] = None
@@ -254,12 +266,102 @@ class QuackClient:
 
         # Auto-connect if host is provided
         if host is not None:
-            self.connect(
-                host=host,
-                port=port,
-                attach_alias=attach_alias,
-                disable_ssl=disable_ssl,
-            )
+            try:
+                self.connect(
+                    host=host,
+                    port=port,
+                    attach_alias=attach_alias,
+                    disable_ssl=disable_ssl,
+                )
+            except RuntimeError:
+                if auto_start_server:
+                    logger.info("Could not connect to server -- attempting auto-start...")
+                    self._auto_start_server(
+                        host=host,
+                        port=port,
+                        attach_alias=attach_alias,
+                        disable_ssl=disable_ssl,
+                    )
+                else:
+                    raise
+
+    # ------------------------------------------------------------------
+    # Auto-start server management
+    # ------------------------------------------------------------------
+
+    def _auto_start_server(
+        self,
+        host: str,
+        port: int,
+        attach_alias: str,
+        disable_ssl: bool,
+    ) -> None:
+        """Auto-start a Quack server in-process, then connect to it.
+
+        Uses the persistent config (if available) to configure the server,
+        then starts it and connects the client to it.
+        """
+        # Load server config from config file / env
+        cfg = load_config()
+        server_cfg = cfg.server
+
+        # Override with the host:port the client was trying to connect to
+        server_cfg.host = "0.0.0.0" if host in ("localhost", "127.0.0.1") else host
+        server_cfg.port = port
+        server_cfg.token = self._token
+
+        self._auto_start_config = server_cfg
+
+        # Lazily import QuackServer to avoid circular imports
+        from duckdbcs.server import QuackServer  # noqa: F811
+
+        server = QuackServer(token=self._token)
+        self._auto_started_server = server
+
+        logger.info(
+            "Auto-starting Quack server on %s:%d ...",
+            server_cfg.host, server_cfg.port,
+        )
+        server.start(
+            host=server_cfg.host,
+            port=server_cfg.port,
+            allow_other_hostname=server_cfg.allow_other_hostname,
+            disable_ssl=server_cfg.disable_ssl,
+        )
+
+        # Auto-attach databases from config
+        for attach_entry in server_cfg.attach_on_startup:
+            try:
+                server.attach_database(attach_entry["path"], attach_entry.get("alias"))
+            except Exception as exc:
+                logger.warning(
+                    "Failed to auto-attach '%s' on auto-started server: %s",
+                    attach_entry.get("path"),
+                    exc,
+                )
+
+        # Now connect the client to this newly started server
+        self.connect(
+            host=host,
+            port=port,
+            attach_alias=attach_alias,
+            disable_ssl=disable_ssl,
+        )
+
+        # Register cleanup for auto-stopped server
+        if self._auto_stop_server:
+            atexit.register(self._cleanup_auto_server)
+
+    def _cleanup_auto_server(self) -> None:
+        """Stop the auto-started server if one was started and auto-stop is enabled."""
+        if self._auto_started_server is not None and self._auto_stop_server:
+            logger.info("Stopping auto-started Quack server ...")
+            try:
+                self._auto_started_server.stop()
+                self._auto_started_server.close()
+            except Exception as exc:
+                logger.warning("Error stopping auto-started server: %s", exc)
+            self._auto_started_server = None
 
     # ------------------------------------------------------------------
     # Factory methods
@@ -341,7 +443,7 @@ class QuackClient:
             Client status dict.
         """
         if self._attached:
-            logger.info("Already connected — disconnecting first.")
+            logger.info("Already connected -- disconnecting first.")
             self.disconnect()
 
         self._config = ClientConfig(
@@ -358,9 +460,9 @@ class QuackClient:
         try:
             self._conn.execute("LOAD quack;")
 
-            attach_sql = (
-                f"ATTACH '{uri}' AS {attach_alias} (TOKEN '{self._token}'"
-                + (", DISABLE_SSL true)" if disable_ssl else ")")
+            suffix = ", DISABLE_SSL true)" if disable_ssl else ")"
+            attach_sql = "ATTACH '%s' AS %s (TOKEN '%s'%s" % (
+                uri, attach_alias, self._token, suffix,
             )
             self._conn.execute(attach_sql)
 
@@ -511,7 +613,7 @@ class QuackClient:
                 results.query("SELECT ... FROM result")
 
         Examples:
-            # Return a QuackResult — just like duckdb.sql():
+            # Return a QuackResult -- just like duckdb.sql():
             result = client.query("SELECT 42")
             result.show()
 
@@ -546,7 +648,7 @@ class QuackClient:
                             safe_sql = sql_str.replace(chr(39), chr(39) + chr(39))
                             full_sql = f"FROM {catalog}.query('{safe_sql}')"
                             logger.info(
-                                "Local query failed — auto-rerouting through %s: %s",
+                                "Local query failed -- auto-rerouting through %s: %s",
                                 catalog, full_sql,
                             )
                             self._refresh_server_databases()
@@ -608,7 +710,7 @@ class QuackClient:
                             safe_sql = sql_str.replace(chr(39), chr(39) + chr(39))
                             full_sql = f"FROM {catalog}.query('{safe_sql}')"
                             logger.info(
-                                "Local execute failed — auto-rerouting through %s: %s",
+                                "Local execute failed -- auto-rerouting through %s: %s",
                                 catalog, full_sql,
                             )
                             self._refresh_server_databases()
@@ -855,6 +957,7 @@ class QuackClient:
         if self._attached:
             self.disconnect()
         self._conn.close()
+        self._cleanup_auto_server()
         logger.info("Client connection closed.")
 
     def __enter__(self):
