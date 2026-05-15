@@ -278,6 +278,11 @@ class QuackServer:
             return match.group(1)
         raise ValueError("Could not extract macro name from SQL.")
 
+    @property
+    def pid(self) -> Optional[int]:
+        """Return the PID of the server process (useful in background mode)."""
+        return os.getpid()
+
     def __enter__(self):
         return self
 

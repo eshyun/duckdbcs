@@ -22,6 +22,7 @@ DEFAULT_TOKEN_ENVVAR = "QUACK_TOKEN"
 DEFAULT_TOKEN_FILE = ".quack_secret"
 CONFIG_DIR = Path.home() / ".config" / "duckdbcs"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
+PID_FILE = CONFIG_DIR / "server.pid"
 
 
 # ---------------------------------------------------------------------------

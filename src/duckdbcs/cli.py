@@ -11,7 +11,11 @@ Usage:
 """
 
 import logging
+import os
+
 import sys
+import signal
+
 from pathlib import Path
 from typing import Optional
 
@@ -360,6 +364,10 @@ def server_start(
         help="Attach a DB at startup (format: path:alias, can be repeated)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
+    background: bool = typer.Option(
+        False, "--background", "--bg",
+        help="Run server in background as a daemon process (Unix only)",
+    ),
 ):
     """Start the Quack server.
 
@@ -368,6 +376,30 @@ def server_start(
     2. CLI --attach arguments (override/add to config)
     """
     _setup_logging(verbose)
+
+    # Handle background / daemon mode (Unix only)
+    if background:
+        if os.name == "nt":
+            print("Warning: --background is not supported on Windows. Running in foreground.")
+        else:
+            pid = os.fork()
+            if pid > 0:
+                # Parent process: print PID and exit
+                print(f"DuckDB Quack server starting in background (PID: {pid})")
+                sys.exit(0)
+            # Child process: become session leader, detach from terminal
+            os.setsid()
+            # Redirect stdio to /dev/null so the daemon doesn't keep the terminal open
+            devnull = os.open(os.devnull, os.O_RDWR)
+            os.dup2(devnull, 0)  # stdin
+            os.dup2(devnull, 1)  # stdout
+            os.dup2(devnull, 2)  # stderr
+            os.close(devnull)
+
+            # Write PID file for server stop command
+            from duckdbcs.config import PID_FILE
+            PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+            PID_FILE.write_text(str(os.getpid()))
     cfg = load_config()
     token = _resolve_token(token)
 
@@ -394,14 +426,56 @@ def server_start(
         databases=databases,
     )
 
+    # Clean up PID file after server stops (only in background mode)
+    if background and os.name != "nt":
+        from duckdbcs.config import PID_FILE
+        try:
+            if PID_FILE.exists():
+                PID_FILE.unlink()
+        except OSError:
+            pass
+
 
 @server_app.command("stop", help="Stop the Quack server")
-def server_stop():
-    print("Use the Python API to stop the server:")
-    print("  from duckdbcs import QuackServer")
-    print("  with QuackServer(token='...') as server:")
-    print("      server.start()")
-    print("      server.stop()")
+def server_stop(
+    force: bool = typer.Option(False, "--force", "-f", help="Force kill the server process"),
+):
+    """Stop a running Quack server (started with --background).
+
+    Reads the PID from the PID file and sends a termination signal.
+    """
+    from duckdbcs.config import PID_FILE
+
+    if not PID_FILE.exists():
+        print("No running server found (PID file not found).")
+        print("If the server was started without --background, use Ctrl+C to stop it.")
+        raise typer.Exit(code=1)
+
+    try:
+        pid = int(PID_FILE.read_text().strip())
+    except (ValueError, OSError) as exc:
+        print(f"Error reading PID file: {exc}")
+        raise typer.Exit(code=1)
+
+    try:
+        if force:
+            os.kill(pid, signal.SIGKILL)
+            print(f"Force killed server process (PID: {pid}).")
+        else:
+            os.kill(pid, signal.SIGTERM)
+            print(f"Stopping server (PID: {pid}) ...")
+    except ProcessLookupError:
+        print(f"Server process (PID: {pid}) is not running.")
+    except PermissionError:
+        print(f"Permission denied to stop server (PID: {pid}).")
+        raise typer.Exit(code=1)
+
+    # Clean up PID file
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+    except OSError:
+        pass
 
 
 @server_app.command("status", help="Show server status")
