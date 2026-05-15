@@ -284,6 +284,7 @@ class QuackClient:
                     port=port,
                     attach_alias=attach_alias,
                     disable_ssl=disable_ssl,
+                    suppress_warning=auto_start_server,
                 )
             except RuntimeError:
                 if auto_start_server:
@@ -432,10 +433,11 @@ class QuackClient:
 
     def connect(
         self,
-        host: str = "localhost",
-        port: int = 9494,
+        host: str | None = None,
+        port: int | None = None,
         attach_alias: str = "remote_server",
         disable_ssl: bool = False,
+        suppress_warning: bool = False,
     ) -> dict:
         """Connect to a Quack server by attaching it as a remote catalog.
 
@@ -487,7 +489,8 @@ class QuackClient:
             return self.status()
 
         except duckdb.Error as exc:
-            logger.warning("Failed to connect to Quack server: %s", exc)
+            if not suppress_warning:
+                logger.warning("Failed to connect to Quack server: %s", exc)
             raise RuntimeError(f"Could not connect to Quack server at {uri}: {exc}") from exc
 
     def disconnect(self) -> None:
