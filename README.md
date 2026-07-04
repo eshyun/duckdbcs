@@ -181,6 +181,7 @@ duckdbcs client connect localhost \
   --port 9494 \
   --alias my_server
 
+```
 **옵션:**
 
 | 옵션 | 기본값 | 설명 |
